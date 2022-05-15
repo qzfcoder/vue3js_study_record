@@ -72,6 +72,8 @@ const obj = {
 
 **实现render函数：**
 
+​	我们给render函数提供了一个树型结构的对象，和一个根节点，通过递归将数据结构渲染到传入的节点上
+
 ```js
 function render(obj, root) {
   const el = document.createElement(obj.tag);
