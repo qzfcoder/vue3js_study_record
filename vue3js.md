@@ -90,6 +90,63 @@ function render(obj, root) {
 
 ```
 
+​	我们可以引入编译的手段（compiler），将html模板编译成render函数所需要的树型结构，那么分别调用compiler和render函数就可以把页面渲染出来，这就是**运行时+编译**的框架了，他既支持运行时，用户可以直接提供数据对象从而无需编译，有支持编译时候，提供html编译后在交给运行时处理。
+
+​	若是编译器（compiler）直接将模板转成命令式代码，那么render就并不需要了，这就直接变成了一个纯编译的框架了。
+
+## 3、框架部分
+
+#### 1、构建工具\_DEV\_
+
+​	构建工具设置预定义的常量\_DEV\_，能够在生产环境中使框架不包含用于打印报警信息的代码
+
+#### 2、TREE-Shaking
+
+​	Tree-Sharking指的就是消除那些永远不会执行的代码，也就是排除dead code。
+
+​	要想实现Tree-Sharking，则必须满足一个条件，ESM（ES-Modules），Tree-Sharking依赖于ESM的静态结构。
+
+​	我们在编写两个函数a.js和b.js。将b.js导入到main.js中，打包出来，发现不会存在a.js，a.js会被当做dead code删除。
+
+​	若是该函数不会又任何副作用产生等，可以写上/*#_PURE\_#\* /注释，标识该函数不会产生任何的副作用，可以进行Tree-Sharking。
+
+## 4、Vue3的设计思路
+
+### 	1、声明式的描述UI
+
+​	使用模板来声明式的描述ui，事件也存在这对应的描述方式。 
+
+### 	2、渲染器
+
+​	渲染器的作用就是把虚拟DOM渲染为真实DOM。
+
+```js
+function render(vnode, container) {
+  // 通过传来的vnode中的tag，来创建一个节点
+  const el = document.createElement(vnode.tag);
+  // props为节点中包含的属性和事件
+  for (const key in vnode.props) {
+    if (/^on/.test(key)) {
+      el.addEventListener(
+        key.substr(2).toLowerCase(), // onClick - click
+        vnode.props[key] // 传入的事件方法
+      );
+    }
+  }
+  if (typeof vnode.children === "string") {
+    el.appendChild(document.createTextNode(vnode.children));
+  } else if (Array.isArray(vnode.children)) {
+    vnode.children.forEach((child) => {
+      render(child, el);
+    });
+  }
+  container.appendChild(el);
+}
+
+```
+
+
+
 
 
 
