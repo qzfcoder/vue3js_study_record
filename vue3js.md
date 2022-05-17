@@ -145,9 +145,200 @@ function render(vnode, container) {
 
 ```
 
+#####  **什么是组件**
 
+​	组件就是一组DOM元素的封装，这组DOM元素就是组件要渲染的内容，我们可以通过定义一个函数来标识组件，而函数的返回值就是组件要渲染的内容。
 
+​	而在虚拟DOM中，我们可以用tag来存放这个函数返回的对象。若要渲染这种形式的tag，那么我们就需要一个新的render函数来处理这种新的逻辑。
 
+```js
+function render(vnode, container) {
+  if (typeof vnode.tag === "string") {
+    mountElement(vnode, container);
+  } else if (typeof vnode.tag === "function") {
+    mountComponent(vnode, container);
+  }
+}
 
+function mountElement(vnode, container) {
+  const el = document.createElement(vnode.tag);
+  for (const key in vnode.props) {
+    if (/^on/.test(key)) {
+      el.addEventListener(key.substr.toLowerCase(), vnode.props[key]);
+    }
+  }
+  if (typeof vnode.children === "string") {
+    el.appendChild(document.createTextNode(vnode.children));
+  } else if (Array.isArray(vnode.children)) {
+    vnode.children.forEach((child) => {
+      render(child, el);
+    });
+  }
+  container.appendChild(el);
+}
 
+function mountComponent(vnode, container) {
+  // 当传入的是组件的时候，tag是一个函数对象，执行获取到真正的虚拟DOM
+  const subtree = vnode.tag();
+  render(subtree, container);
+}
+
+```
+
+**组件不一定一定是要函数**，我们可以传入object等不同的类型，只不过获取到虚拟DOM方式需要相对不同的进行处理改变。反正不管是什么格式的，到最后需要获取到的就是虚拟DOM的形式。
+
+### 3、编译器
+
+​	编译器的作用就是将模板编译成渲染函数。在编译器眼中，模板就是一个简单的字符串，通过分析解析，将其变成渲染函数，一个.vue文件就是一个组件，template中的内容就是模板的内容，编译器会把模板进行编译，形成一个渲染函数，添加到script中的组件对象上，
+
+## 5、响应式系统
+
+### 1、响应式数据和副作用函数
+
+​	副作用函数指的是，会产生副作用的函数，其实就是，当这个函数运行的时候会直接或者间接的影响其他函数的执行或者修改了外部变量等等。
+
+​	什么是响应式数据，比如说在一个函数中读取了一个对象中的属性，当这个对象中的属性发生变化的时候，这个函数也会再次被执行。那么这个对象中属性，就是响应式数据。
+
+#### 	1、如何去实现这个呢？
+
+​		首先，我们可以通过某一种方式，将用到这个值的方法操作等，都放到一个**”桶“**中，当我们这个值发生变化的时候，从这个**”桶“**中再次取出，重新执行。
+
+**基本实现，简单的响应式**
+
+```js
+// 存储副作用函数的桶
+const bucket = new Set();
+
+const data = {
+  test: "hello active",
+};
+
+const obj = new Proxy(data, {
+  // 拦截读取操作
+  get(target, key) {
+    // 将副作用函数存入桶中
+    bucket.add(effect);
+    return target(key);
+  },
+  set(target, key, newValue) {
+    target[key] = newValue;
+    bucket.forEach((fn) => fn());
+    return true;
+  },
+});
+
+function effect() {
+  document.body.innerText = obj.test;
+}
+// 执行副作用函数，通过拦截器将函数存入桶中
+effect();
+
+// 1秒后将obj中test文案修改，通过拦截器触发副作用函数，修改页面上的值
+setTimeout(() => {
+  obj.test = "123";
+}, 1000);
+
+```
+
+#### 2、设计一个完整的响应系统
+
+​	当读取操作的时候将函数收集到桶中
+
+​	当设置操作发生的时候将桶中的函数取出执行	
+
+```js
+let activeEffect;
+function effect(fn) {
+  //用于注册副作用函数
+  activeEffect = fn;
+  fn();
+}
+// 存储副作用函数的桶
+const bucket = new Set();
+
+const data = {
+  test: "hello active",
+};
+
+const obj = new Proxy(data, {
+  // 拦截读取操作
+  get(target, key) {
+    // 将副作用函数存入桶中
+    // bucket.add(effect);
+    if (activeEffect) {
+      // 通过判断是否存在activeEffect来进行存储，
+      // 这样就不用依赖副作用函数名字，不用局限于副作用函数名字一定要为effect了
+      bucket.add(activeEffect);
+    }
+    return target[key];
+  },
+  set(target, key, newValue) {
+    target[key] = newValue;
+    bucket.forEach((fn) => fn());
+    return true;
+  },
+});
+
+// 执行副作用函数，通过拦截器将函数存入桶中
+effect(() => {
+  console.log(obj.test);
+});
+
+// 1秒后将obj中test文案修改，通过拦截器触发副作用函数，修改页面上的值
+setTimeout(() => {
+  obj.test = "123";
+}, 1000);
+setTimeout(() => {
+  obj.noExit = "234";
+}, 2000);
+
+```
+
+当前情况下，副作用函数与目标字段之间没有存在任何依赖关系，不管输入什么，只要触发了proxy，就会把桶中的函数都给执行一遍，这并不是我们所希望的。我们需要给副作用函数与目标字段之间建立一个联系。通过这个联系来触发函数的执行。
+
+​	我们可以通过target（目标对象），key（键值），effectFn（副作用函数）来建立一个关系。
+
+两个函数都是同一个对象的属性值的时候，target —》key —》两个函数
+
+俩个函数对应一个对象中不同的两个key的时候 target —》 key —》函数
+
+​																									key —》函数
+
+俩个函数对应两个个对象中不同的两个key的时候 target —》 key —》函数
+
+​																					target —》key —》函数
+
+我们使用weakMap作为最外层桶的结构。
+
+```js
+// 存储副作用函数的桶
+const bucket = new WeakMap();
+
+const obj = new Proxy(data, {
+  get(target, key) {
+    if (!activeEffect) return;
+    let depsMap = bucket.get(target);
+    if (!depsMap) {
+      bucket.set(target, (depsMap = new Map()));
+    }
+    let deps = depsMap.get(key);
+    if (!deps) {
+      depsMap.set(key, (deps = new Set()));
+    }
+    deps.add(activeEffect);
+    return target[key];
+  },
+  set(target, key, newValue) {
+    target[key] = newValue;
+    const depsMap = bucket.get(target);
+    if (!depsMap) return;
+    const effects = depsMap.get(key);
+    effects &&
+      effects.forEach((fn) => {
+        fn();
+      });
+  },
+});
+
+```
 
