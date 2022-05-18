@@ -342,3 +342,66 @@ const obj = new Proxy(data, {
 
 ```
 
+weakMap 由target --》map组成 （**weakMap**的key是弱引用，他不会影响垃圾回收机制的工作，一旦表达式执行完成后，垃圾回收机制会自动把他回收掉。）
+
+Map 由key--》set组成
+
+set中存储的副作用函数，当我们改变对象中一个key的时候，我们可以找到其对应被收集到的副作用函数，来进行使用。
+
+```js
+// 将函数独立出去
+const obj = new Proxy(data, {
+  get(target, key) {
+    track(target, key);
+    return target[key];
+  },
+  set(target, key, newValue) {
+    target[key] = newValue;
+    trigger(target, key);
+  },
+});
+
+function track(target, key) {
+  if (!activeEffect) return;
+  let depsMap = bucket.get(target);
+
+  if (!depsMap) {
+    bucket.set(target, (depsMap = new Map()));
+  }
+  let deps = depsMap.get(key);
+  if (!deps) {
+    depsMap.set(key, (deps = new Set()));
+  }
+  deps.add(activeEffect);
+}
+
+function trigger(target, key) {
+  const depsMap = bucket.get(target);
+  if (!depsMap) return;
+  const effects = depsMap.get(key);
+  effects &&
+    effects.forEach((fn) => {
+      fn();
+    });
+}
+
+```
+
+当我们遇到一个副作用函数中，存在分支切换的时候
+
+```js
+effect(()=>{
+	document.body.innerHtml = obj.ok ? obj.test : ''
+})
+```
+
+ok是一种effect test又是另一种effect。
+
+当ok为false的时候，test的副作用函数不会被读取，只会触发当前ok的触发
+
+
+
+我们需要做的就是，每次副作用函数执行的时候，先把他从所有关联的依赖中删除。
+
+
+
