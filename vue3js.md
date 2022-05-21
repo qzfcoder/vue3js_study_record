@@ -437,3 +437,242 @@ function track(target, key) {
 
 #### 3、嵌套effect与effect栈
 
+effect副作用函数是可以发生嵌套的
+
+```js
+effect(function effectFn1(){
+	effect(function effectFn2(){
+	// 等等操作，或者继续嵌套
+	})
+})
+```
+
+上述代码Fn1的执行会导致Fn2的执行。
+
+```js
+const Foo = {
+	render(){
+		return // ....
+	}
+}
+
+effect(()=>{
+	Foo.render()
+})
+```
+
+例如：
+
+```js
+const Bar = {
+    render() {
+        return // ....
+    }
+}
+const Foo = {
+	render(){
+        // Foo中渲染了Bar组件
+		return <Bar/>
+	}
+}
+// 这时候执行Foo.render就发生了嵌套
+effect(()=>{
+	Foo.render()
+})
+```
+
+**之前设计的响应式系统并不支持effect嵌套**
+
+测试代码：
+
+```js
+let activeEffect;
+function effect(fn) {
+  const effectFn = () => {
+    // 当函数执行的时候，把函数赋值给activeEffect
+    activeEffect = effectFn;
+    fn();
+  };
+  // effectFn.deps 哟过来存储，所有与该副作用函数相关联的依赖集合
+  effectFn.deps = [];
+  effectFn();
+}
+const bucket = new WeakMap();
+function track(target, key) {
+  if (!activeEffect) return;
+  let depsMap = bucket.get(target);
+
+  if (!depsMap) {
+    bucket.set(target, (depsMap = new Map()));
+  }
+  let deps = depsMap.get(key);
+  if (!deps) {
+    depsMap.set(key, (deps = new Set()));
+  }
+  deps.add(activeEffect);
+  activeEffect.deps.push(deps); // 存储所有相关的副作用函数
+}
+function trigger(target, key) {
+  const depsMap = bucket.get(target);
+  if (!depsMap) return;
+  const effects = depsMap.get(key);
+  effects &&
+    effects.forEach((fn) => {
+      fn();
+    });
+}
+const data = {
+  foo: true,
+  bar: true,
+};
+
+const obj = new Proxy(data, {
+  get(target, key) {
+    track(target, key);
+    return target[key];
+  },
+  set(target, key, newValue) {
+    target[key] = newValue;
+    trigger(target, key);
+  },
+});
+let temp1, temp2;
+
+effect(function effectFn1() {
+  console.log("effectFn1执行了1111111");
+  effect(function effectFn2() {
+    console.log("effectFn2执行了2222222222");
+    temp2 = obj.bar;
+  });
+  temp1 = obj.foo;
+});
+
+// obj.foo = "1";
+// effectFn1执行了1111111
+// effectFn2执行了2222222222
+// effectFn2执行了2222222222
+
+
+```
+
+什么原因导致的呢
+
+```js
+function effect(fn) {
+  const effectFn = () => {
+    // 当函数执行的时候，把函数赋值给activeEffect
+    console.log(effectFn);
+    activeEffect = effectFn;
+    fn();
+  };
+  // effectFn.deps 哟过来存储，所有与该副作用函数相关联的依赖集合
+  effectFn.deps = [];
+  effectFn();
+}
+```
+
+​	上述函数，在同一时刻只能存在一个effectFn给activeEffect，那么当嵌套的时候，一定是最后一层的fn为activeEffect。这时候我们需要一个副作用函数栈来处理。将当前副作用函数压入栈顶，待副作用函数执行完毕后，将其从栈中弹出，让active指向栈顶的函数。
+
+```js
+let activeEffect;
+// 副作用函数栈
+const effectStack = [];
+function cleanup(effectFn) {
+  for (let index = 0; index < effectFn.deps.length; index++) {
+    const deps = effectFn.deps[i];
+    deps.delete(effectFn);
+  }
+  effectFn.deps.length = 0;
+}
+function effect(fn) {
+  const effectFn = () => {
+    cleanup(effectFn);
+    // 当函数执行的时候，把函数赋值给activeEffect
+    activeEffect = effectFn;
+    effectStack.push(effectFn);
+    fn();
+    effectStack.pop();
+    activeEffect = effectStack[effectStack.length - 1];
+  };
+  // effectFn.deps 哟过来存储，所有与该副作用函数相关联的依赖集合
+  effectFn.deps = [];
+  effectFn();
+}
+const bucket = new WeakMap();
+function track(target, key) {
+  if (!activeEffect) return;
+  let depsMap = bucket.get(target);
+
+  if (!depsMap) {
+    bucket.set(target, (depsMap = new Map()));
+  }
+  let deps = depsMap.get(key);
+  if (!deps) {
+    depsMap.set(key, (deps = new Set()));
+  }
+  deps.add(activeEffect);
+  activeEffect.deps.push(deps); // 存储所有相关的副作用函数
+}
+function trigger(target, key) {
+  const depsMap = bucket.get(target);
+  if (!depsMap) return;
+  const effects = depsMap.get(key);
+  effects &&
+    effects.forEach((fn) => {
+      fn();
+    });
+}
+const data = {
+  foo: true,
+  bar: true,
+};
+
+const obj = new Proxy(data, {
+  get(target, key) {
+    track(target, key);
+    return target[key];
+  },
+  set(target, key, newValue) {
+    target[key] = newValue;
+    trigger(target, key);
+  },
+});
+let temp1, temp2;
+
+effect(function effectFn1() {
+  console.log("effectFn1执行了1111111");
+  effect(function effectFn2() {
+    console.log("effectFn2执行了2222222222");
+    temp2 = obj.bar;
+  });
+  temp1 = obj.foo;
+});
+obj.bar = "1";
+
+```
+
+处理无限递归 循环的问题。当函数不断自增的时候。会导致栈溢出，
+
+```js
+effect(()=>{
+	obj.foo = obj.foo +1
+})
+```
+
+```js
+function trigger(target, key) {
+	const depsMap = bucket.get(target)
+	if(depsMap) return 
+	const effects = depsMap.get(key)
+	const effectsToRun = new Set()
+	effects && effects.forEach(effectFn=>{
+
+	if(effectFn !== activeEffect) {
+		effectsToRun.add(effectFn)
+	}
+	})
+	effetcsToRun.forEach(effectFn=>effectFn())
+	
+}
+```
+
